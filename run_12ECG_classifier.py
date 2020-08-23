@@ -5,6 +5,11 @@ import tensorflow as tf
 from tensorflow import keras
 from scipy.io import loadmat
 import tensorflow_addons as tfa
+from scipy.signal import butter, lfilter, filtfilt
+from scipy.signal import find_peaks
+from scipy.signal import peak_widths
+from scipy.signal import savgol_filter
+
 
 
 
@@ -66,7 +71,7 @@ def create_model():
 
     model.compile(loss=tf.keras.losses.BinaryCrossentropy(), optimizer=tf.keras.optimizers.Adam(), 
     metrics=[tf.keras.metrics.BinaryAccuracy(name='accuracy', dtype=None, threshold=0.5)])
-  return model
+    return model
 
 
 def run_12ECG_classifier(data,header_data,loaded_model):
@@ -168,3 +173,60 @@ def load_12ECG_model(model_input):
     model.load_weights(filename)
 
     return model
+
+def DetectRWithPanTompkins (signal, signal_freq):
+    '''signal=ECG signal (type=np.array), signal_freq=sample frequenzy'''
+    lowcut = 5.0
+    highcut = 15.0
+    filter_order = 2
+    
+    nyquist_freq = 0.5 * signal_freq
+    low = lowcut / nyquist_freq
+    high = highcut / nyquist_freq
+    
+    b, a = butter(filter_order, [low, high], btype="band")
+    y = lfilter(b, a, signal)
+    
+    diff_y=np.ediff1d(y)
+    squared_diff_y=diff_y**2
+    
+    integrated_squared_diff_y =np.convolve(squared_diff_y,np.ones(5))
+    
+    normalized = (integrated_squared_diff_y-min(integrated_squared_diff_y))/(max(integrated_squared_diff_y)-min(integrated_squared_diff_y))
+    """
+    peaks, metadata = find_peaks(integrated_squared_diff_y, 
+                                 distance=signal_freq/5 , 
+                                 height=(sum(integrated_squared_diff_y)/len(integrated_squared_diff_y))
+                                )
+    """
+    peaks, metadata = find_peaks(normalized, 
+                             distance=signal_freq/5 , 
+                             #height=500,
+                             height=0.5,
+                             width=0.5
+                            )
+
+    return peaks
+
+def heartrate(r_time, sampfreq):
+    
+    #qrs = xqrs.qrs_inds from annotateR()
+    #sampfreq = sample frequency - can be found with y['fs'] (from getDataFromPhysionet())
+    
+    HeartRate = []
+    TimeBetweenBeat= []
+    for index, item in enumerate(r_time,-1):
+        HeartRate.append(60/((r_time[index+1]-r_time[index])/sampfreq))
+        TimeBetweenBeat.append((r_time[index+1]-r_time[index])/sampfreq)
+    del HeartRate[0]
+    avgHr = sum(HeartRate)/len(HeartRate)
+    TimeBetweenBeat= np.asarray(TimeBetweenBeat)
+    TimeBetweenBeat=TimeBetweenBeat * 1000 # sec to ms
+    TimeBetweenBeat = TimeBetweenBeat[1:] # remove first element
+    return TimeBetweenBeat, avgHr
+
+def R_correction(signal, peaks):
+    '''signal = ECG signal, peaks = uncorrected R peaks'''
+    peaks_corrected, metadata = find_peaks(signal, distance=min(np.diff(peaks)))            
+    return peaks_corrected  
+
